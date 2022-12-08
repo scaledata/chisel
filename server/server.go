@@ -2,7 +2,7 @@ package chserver
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -32,17 +32,18 @@ type Config struct {
 	TLS       TLSConfig
 }
 
-// Server respresent a chisel service
+// Server represents a chisel service
 type Server struct {
 	*cio.Logger
-	config       *Config
-	fingerprint  string
-	httpServer   *cnet.HTTPServer
-	reverseProxy *httputil.ReverseProxy
-	sessCount    int32
-	sessions     *settings.Users
-	sshConfig    *ssh.ServerConfig
-	users        *settings.UserIndex
+	config             *Config
+	fingerprint        string
+	httpServer         *cnet.HTTPServer
+	reverseProxy       *httputil.ReverseProxy
+	sessCount          int32
+	sessions           *settings.Users
+	sshConfig          *ssh.ServerConfig
+	users              *settings.UserIndex
+	CustomAuthCallback func(user string, pass []byte) (*settings.User, error)
 }
 
 var upgrader = websocket.Upgrader{
@@ -178,8 +179,16 @@ func (s *Server) authUser(c ssh.ConnMetadata, password []byte) (*ssh.Permissions
 	n := c.User()
 	user, found := s.users.Get(n)
 	if !found || user.Pass != string(password) {
-		s.Debugf("Login failed for user: %s", n)
-		return nil, errors.New("Invalid authentication for username: %s")
+		// try authenticating user if auth-callback is available
+		if s.CustomAuthCallback != nil {
+			if user, err := s.CustomAuthCallback(n, password); err == nil {
+				s.Infof("Authentication successful for user: %s\n", n)
+				s.sessions.Set(string(c.SessionID()), user)
+				return nil, nil
+			}
+		}
+		s.Infof("Authentication failed for user: %s\n", n)
+		return nil, fmt.Errorf("authentication failed for user: %s", n)
 	}
 	// insert the user session map
 	// TODO this should probably have a lock on it given the map isn't thread-safe
