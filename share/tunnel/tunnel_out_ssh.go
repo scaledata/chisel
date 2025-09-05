@@ -79,6 +79,23 @@ func (t *Tunnel) handleSocks(src io.ReadWriteCloser) error {
 }
 
 func (t *Tunnel) handleTCP(l *cio.Logger, src io.ReadWriteCloser, hostPort string) error {
+	// Check if the host is blocked - hardcoded for specific endpoint
+	if strings.Contains(hostPort, "rubrikprodstorageacc.blob.core.windows.net") || strings.Contains(hostPort, "rubrikdevstorageacc.blob.core.windows.net") {
+		l.Debugf("Blocked connection to %s", hostPort)
+		// Read and discard data to save egress bandwidth while appearing natural to client
+		const copyBytesLimit = 64 * 1024 // 64KB limit to prevent resource exhaustion
+
+		_, err := io.CopyN(io.Discard, src, copyBytesLimit)
+		if err != nil {
+			// Seeing large number of EOF logs so skipping that in errors
+			if err != io.EOF {
+				l.Debugf("Error in copying data from blocked connection: %v", err)
+			}
+		}
+		src.Close()
+		return nil // Return nil to avoid propagating EOF errors
+	}
+
 	dst, err := net.Dial("tcp", hostPort)
 	if err != nil {
 		return err
